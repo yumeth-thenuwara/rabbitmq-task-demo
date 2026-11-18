@@ -1,4 +1,7 @@
+
 package com.neopadma.rabbitmqdemo;
+
+import java.util.List;
 
 import org.springframework.http.HttpStatus;
 import org.springframework.web.bind.annotation.*;
@@ -17,16 +20,26 @@ public class TaskController {
     public record TaskRequest(String text) {}
 
     @PostMapping
-    public TaskService.Task create(@RequestBody TaskRequest request) {
+    public TaskService.Task create(
+            @RequestBody TaskRequest request) {
 
-        if (request.text() == null || request.text().isBlank()) {
+        if (request == null
+                || request.text() == null
+                || request.text().isBlank()
+                || request.text().length() > 2000) {
+
             throw new ResponseStatusException(
                     HttpStatus.BAD_REQUEST,
-                    "Text is required"
+                    "Text must contain 1-2000 characters"
             );
         }
 
         return service.submit(request.text());
+    }
+
+    @GetMapping
+    public List<TaskService.Task> list() {
+        return service.findAll();
     }
 
     @GetMapping("/{id}")

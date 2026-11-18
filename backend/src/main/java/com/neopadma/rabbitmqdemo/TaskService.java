@@ -1,22 +1,25 @@
+
 package com.neopadma.rabbitmqdemo;
 
-import java.util.Map;
+import java.util.List;
 import java.util.UUID;
-import java.util.concurrent.ConcurrentHashMap;
 
 import org.springframework.amqp.rabbit.annotation.RabbitListener;
 import org.springframework.amqp.rabbit.core.RabbitTemplate;
+import org.springframework.data.domain.Sort;
 import org.springframework.stereotype.Service;
 
 @Service
 public class TaskService {
 
     private final RabbitTemplate rabbitTemplate;
-    private final Map<String, Task> tasks =
-            new ConcurrentHashMap<>();
+    private final TaskRepository repository;
 
-    public TaskService(RabbitTemplate rabbitTemplate) {
+    public TaskService(
+            RabbitTemplate rabbitTemplate,
+            TaskRepository repository) {
         this.rabbitTemplate = rabbitTemplate;
+        this.repository = repository;
     }
 
     public record Task(
@@ -26,55 +29,83 @@ public class TaskService {
             String result
     ) {}
 
-    // Producer: Sends a message to RabbitMQ
+    private static Task toTask(TaskJob job) {
+        return new Task(
+                job.getId(),
+                job.getText(),
+                job.getStatus(),
+                job.getResult()
+        );
+    }
+
+    // Producer: Save task, then publish its ID
     public Task submit(String text) {
         String id = UUID.randomUUID().toString();
 
-        Task task = new Task(id, text, "QUEUED", null);
-        tasks.put(id, task);
+        TaskJob job = new TaskJob(id, text);
+
+        // Save before publishing to prevent a race
+        // where the consumer cannot find the job.
+        repository.saveAndFlush(job);
 
         rabbitTemplate.convertAndSend(
                 RabbitConfig.QUEUE_NAME, id
         );
 
-        return task;
+        return toTask(job);
     }
 
     public Task find(String id) {
-        return tasks.get(id);
+        return repository.findById(id)
+                .map(TaskService::toTask)
+                .orElse(null);
     }
 
-    // Consumer: Receives a message from RabbitMQ
-    @RabbitListener(queues = RabbitConfig.QUEUE_NAME)
-    public void process(String taskId) throws InterruptedException {
+    public List<Task> findAll() {
+        return repository.findAll(
+                Sort.by(Sort.Direction.DESC, "createdAt")
+        ).stream().map(TaskService::toTask).toList();
+    }
 
-        // Ignore empty RabbitMQ messages
+    // Consumer: Receive a message and process it
+    @RabbitListener(queues = RabbitConfig.QUEUE_NAME)
+    public void process(String taskId)
+            throws InterruptedException {
+
         if (taskId == null || taskId.isBlank()) {
             System.out.println("Ignored empty RabbitMQ message");
             return;
         }
 
-        Task task = tasks.get(taskId);
+        TaskJob job = repository.findById(taskId)
+                .orElse(null);
 
-        if (task == null) {
+        if (job == null) {
             System.out.println("Task not found: " + taskId);
             return;
         }
 
-        tasks.put(taskId,
-                new Task(taskId, task.text(), "PROCESSING", null));
+        // Basic protection against completed messages
+        if ("COMPLETED".equals(job.getStatus())) {
+            System.out.println("Task already completed: " + taskId);
+            return;
+        }
+
+        job.setStatus("PROCESSING");
+        repository.saveAndFlush(job);
 
         System.out.println("Processing task: " + taskId);
 
-        // Simulate a slow background operation
+        // Simulate a background operation
         Thread.sleep(5000);
 
-        int wordCount = task.text().trim().split("\\s+").length;
+        int wordCount =
+                job.getText().trim().split("\\s+").length;
 
-        String result = "Word count: " + wordCount;
+        job.setStatus("COMPLETED");
+        job.setResult("Word count: " + wordCount);
 
-        tasks.put(taskId,
-                new Task(taskId, task.text(), "COMPLETED", result));
+        repository.saveAndFlush(job);
 
         System.out.println("Completed task: " + taskId);
     }
