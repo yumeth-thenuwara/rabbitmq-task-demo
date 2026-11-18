@@ -96,11 +96,34 @@ public class TaskService {
 
         System.out.println("Processing task: " + taskId);
 
+        
         // Simulate a background operation
         Thread.sleep(5000);
 
+        // Simulate a processing failure for testing
+        if (job.getText().startsWith("FAIL:")) {
+
+            job.setStatus("FAILED");
+            job.setResult("Simulated processing failure");
+
+            // Save failure status to PostgreSQL
+            repository.saveAndFlush(job);
+
+            System.out.println(
+                    "Simulated task failure: " + taskId
+            );
+
+            // Throw an exception so RabbitMQ rejects
+            // and dead-letters the message
+            throw new IllegalStateException(
+                    "Simulated processing failure for task " + taskId
+            );
+        }
+
+        // Normal word counting continues here
         int wordCount =
                 job.getText().trim().split("\\s+").length;
+
 
         job.setStatus("COMPLETED");
         job.setResult("Word count: " + wordCount);
