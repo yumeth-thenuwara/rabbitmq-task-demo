@@ -12,6 +12,9 @@ import org.springframework.amqp.rabbit.core.RabbitTemplate;
 import org.springframework.data.domain.Sort;
 import org.springframework.stereotype.Service;
 
+import org.springframework.amqp.core.Message;
+import org.springframework.messaging.handler.annotation.Payload;
+
 @Service
 public class TaskService {
 
@@ -81,13 +84,25 @@ public class TaskService {
 
     // Consumer: Process tasks with retry support
     @RabbitListener(queues = RabbitConfig.QUEUE_NAME)
-    public void process(String taskId)
+    public void process(
+            @Payload String taskId,
+            Message amqpMessage)
             throws InterruptedException {
 
         if (taskId == null || taskId.isBlank()) {
             System.out.println("Ignored empty RabbitMQ message");
             return;
         }
+
+        // Check whether RabbitMQ has delivered this message before
+        boolean redelivered = Boolean.TRUE.equals(
+                amqpMessage.getMessageProperties().isRedelivered()
+        );
+
+        System.out.println(
+                "RabbitMQ delivery: " + taskId
+                + " | Redelivered: " + redelivered
+        );
 
         TaskJob job = repository.findById(taskId)
                 .orElse(null);
@@ -123,8 +138,15 @@ public class TaskService {
         job.setStatus("PROCESSING");
         repository.saveAndFlush(job);
 
-        // Simulate background processing
-        Thread.sleep(5000);
+        
+        // Simulate a longer task for crash recovery testing
+        long processingTimeMs =
+                job.getText().startsWith("SLOW:")
+                        ? 45_000
+                        : 5_000;
+
+        Thread.sleep(processingTimeMs);
+
 
         // FAIL: Always fails
         boolean permanentFailure =
